@@ -1,6 +1,7 @@
 // This is an advanced implementation of the algorithm described in the
 // following paper:
-//    C. Hertzberg,  R.  Wagner,  U.  Frese,  and  L.  Schroder.  Integratinggeneric   sensor   fusion   algorithms   with   sound   state   representationsthrough  encapsulation  of  manifolds.
+//    C. Hertzberg,  R.  Wagner,  U.  Frese,  and  L.  Schroder.  
+//    Integrating generic sensor fusion algorithms with sound state representations through encapsulation of manifolds.
 //    CoRR,  vol.  abs/1107.1119,  2011.[Online]. Available: http://arxiv.org/abs/1107.1119
 
 /*

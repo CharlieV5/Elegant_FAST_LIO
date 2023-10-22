@@ -38,6 +38,9 @@
 
 #include <vector>
 #include <cstdlib>
+#include <functional> // std::function
+
+#include <omp.h>
 
 #include <boost/bind.hpp>
 #include <Eigen/Core>
@@ -45,6 +48,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
+// Manifold Toolkit [paper 2011, Reference#23]
 #include "../mtk/types/vect.hpp"
 #include "../mtk/types/SOn.hpp"
 #include "../mtk/types/S2.hpp"
@@ -60,7 +64,8 @@ namespace esekfom {
 using namespace Eigen;
 
 //used for iterated error state EKF update
-//for the aim to calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) and the noise covariance (R) at the same time, by only one function.
+//for the aim to calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) 
+//and the noise covariance (R) at the same time, by only one function.
 //applied for measurement as a manifold.
 template<typename S, typename M, int measurement_noise_dof = M::DOF>
 struct share_datastruct
@@ -74,7 +79,8 @@ struct share_datastruct
 };
 
 //used for iterated error state EKF update
-//for the aim to calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) and the noise covariance (R) at the same time, by only one function.
+//for the aim to calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) 
+//and the noise covariance (R) at the same time, by only one function.
 //applied for measurement as an Eigen matrix whose dimension is changing
 template<typename T>
 struct dyn_share_datastruct
@@ -89,7 +95,8 @@ struct dyn_share_datastruct
 };
 
 //used for iterated error state EKF update
-//for the aim to calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) and the noise covariance (R) at the same time, by only one function.
+//for the aim to calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) 
+//and the noise covariance (R) at the same time, by only one function.
 //applied for measurement as a dynamic manifold whose dimension or type is changing
 template<typename T>
 struct dyn_runtime_share_datastruct
@@ -106,9 +113,7 @@ template<typename state, int process_noise_dof, typename input = state, typename
 class esekf{
 
 	typedef esekf self;
-	enum{
-		n = state::DOF, m = state::DIM, l = measurement::DOF
-	};
+	enum { n = state::DOF, m = state::DIM, l = measurement::DOF };
 
 public:
 	
@@ -126,7 +131,8 @@ public:
 	typedef measurement measurementModel_share(state &, share_datastruct<state, measurement, measurement_noise_dof> &);
 	typedef Eigen::Matrix<scalar_type, Eigen::Dynamic, 1> measurementModel_dyn(state &, bool &);
 	//typedef Eigen::Matrix<scalar_type, Eigen::Dynamic, 1> measurementModel_dyn_share(state &,  dyn_share_datastruct<scalar_type> &);
-	typedef void measurementModel_dyn_share(state &,  dyn_share_datastruct<scalar_type> &);
+	// typedef void measurementModel_dyn_share(state &,  dyn_share_datastruct<scalar_type> &);
+	using measurementModel_dyn_share = std::function<void(state &,  dyn_share_datastruct<scalar_type> &)>;
 	typedef Eigen::Matrix<scalar_type ,l, n> measurementMatrix1(state &, bool&);
 	typedef Eigen::Matrix<scalar_type , Eigen::Dynamic, n> measurementMatrix1_dyn(state &, bool&);
 	typedef Eigen::Matrix<scalar_type ,l, measurement_noise_dof> measurementMatrix2(state &, bool&);
@@ -147,7 +153,14 @@ public:
 
 	//receive system-specific models and their differentions.
 	//for measurement as a manifold.
-	void init(processModel f_in, processMatrix1 f_x_in, processMatrix2 f_w_in, measurementModel h_in, measurementMatrix1 h_x_in, measurementMatrix2 h_v_in, int maximum_iteration, scalar_type limit_vector[n])
+	void init(processModel f_in, 
+				processMatrix1 f_x_in, 
+				processMatrix2 f_w_in, 
+				measurementModel h_in, 
+				measurementMatrix1 h_x_in, 
+				measurementMatrix2 h_v_in, 
+				int maximum_iteration, 
+				scalar_type limit_vector[n])
 	{
 		f = f_in;
 		f_x = f_x_in;
@@ -169,7 +182,14 @@ public:
 
 	//receive system-specific models and their differentions.
 	//for measurement as an Eigen matrix whose dimention is chaing.
-	void init_dyn(processModel f_in, processMatrix1 f_x_in, processMatrix2 f_w_in, measurementModel_dyn h_in, measurementMatrix1_dyn h_x_in, measurementMatrix2_dyn h_v_in, int maximum_iteration, scalar_type limit_vector[n])
+	void init_dyn(processModel f_in, 
+					processMatrix1 f_x_in, 
+					processMatrix2 f_w_in, 
+					measurementModel_dyn h_in, 
+					measurementMatrix1_dyn h_x_in, 
+					measurementMatrix2_dyn h_v_in, 
+					int maximum_iteration, 
+					scalar_type limit_vector[n])
 	{
 		f = f_in;
 		f_x = f_x_in;
@@ -192,7 +212,13 @@ public:
 
 	//receive system-specific models and their differentions.
 	//for measurement as a dynamic manifold whose dimension or type is changing.
-	void init_dyn_runtime(processModel f_in, processMatrix1 f_x_in, processMatrix2 f_w_in, measurementMatrix1_dyn h_x_in, measurementMatrix2_dyn h_v_in, int maximum_iteration, scalar_type limit_vector[n])
+	void init_dyn_runtime(processModel f_in, 
+							processMatrix1 f_x_in, 
+							processMatrix2 f_w_in, 
+							measurementMatrix1_dyn h_x_in, 
+							measurementMatrix2_dyn h_v_in, 
+							int maximum_iteration, 
+							scalar_type limit_vector[n])
 	{
 		f = f_in;
 		f_x = f_x_in;
@@ -213,8 +239,14 @@ public:
 
 	//receive system-specific models and their differentions
 	//for measurement as a manifold.
-	//calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) and the noise covariance (R) at the same time, by only one function (h_share_in).
-	void init_share(processModel f_in, processMatrix1 f_x_in, processMatrix2 f_w_in, measurementModel_share h_share_in, int maximum_iteration, scalar_type limit_vector[n])
+	//calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) 
+	//and the noise covariance (R) at the same time, by only one function (h_share_in).
+	void init_share(processModel f_in, 
+					processMatrix1 f_x_in, 
+					processMatrix2 f_w_in, 
+					measurementModel_share h_share_in, 
+					int maximum_iteration, 
+					scalar_type limit_vector[n])
 	{
 		f = f_in;
 		f_x = f_x_in;
@@ -232,10 +264,17 @@ public:
 		x_.build_vect_state();
 	}
 
+	// 实际使用的接口
 	//receive system-specific models and their differentions
 	//for measurement as an Eigen matrix whose dimension is changing.
-	//calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) and the noise covariance (R) at the same time, by only one function (h_dyn_share_in).
-	void init_dyn_share(processModel f_in, processMatrix1 f_x_in, processMatrix2 f_w_in, measurementModel_dyn_share h_dyn_share_in, int maximum_iteration, scalar_type limit_vector[n])
+	//calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) 
+	//and the noise covariance (R) at the same time, by only one function (h_dyn_share_in).
+	void init_dyn_share(processModel f_in, 
+						processMatrix1 f_x_in, 
+						processMatrix2 f_w_in, 
+						measurementModel_dyn_share h_dyn_share_in, 
+						int maximum_iteration, 
+						scalar_type limit_vector[n])
 	{
 		f = f_in;
 		f_x = f_x_in;
@@ -256,9 +295,11 @@ public:
 
 	//receive system-specific models and their differentions
 	//for measurement as a dynamic manifold whose dimension  or type is changing.
-	//calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) and the noise covariance (R) at the same time, by only one function (h_dyn_share_in).
+	//calculate  measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) 
+	//and the noise covariance (R) at the same time, by only one function (h_dyn_share_in).
 	//for any scenarios where it is needed
-	void init_dyn_runtime_share(processModel f_in, processMatrix1 f_x_in, processMatrix2 f_w_in, int maximum_iteration, scalar_type limit_vector[n])
+	void init_dyn_runtime_share(processModel f_in, processMatrix1 f_x_in, 
+		processMatrix2 f_w_in, int maximum_iteration, scalar_type limit_vector[n])
 	{
 		f = f_in;
 		f_x = f_x_in;
@@ -588,7 +629,8 @@ public:
 	}
 
 	//iterated error state EKF update for measurement as a manifold.
-	//calculate measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) and the noise covariance (R) at the same time, by only one function.
+	//calculate measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) 
+	//and the noise covariance (R) at the same time, by only one function.
 	void update_iterated_share() {
 		
 		if(!(is_same<typename measurement::scalar, scalar_type>())){
@@ -887,7 +929,9 @@ public:
 			else
 			{
 			#ifdef USE_sparse
-				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> b = Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Identity(dof_Measurement_noise, dof_Measurement_noise);
+				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> b = 
+					Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Identity(
+						dof_Measurement_noise, dof_Measurement_noise);
 				Eigen::SparseQR<Eigen::SparseMatrix<scalar_type>, Eigen::COLAMDOrdering<int>> solver; 
 				solver.compute(R_);
 				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> R_in_temp = solver.solve(b);
@@ -996,8 +1040,10 @@ public:
 			}
 		}
 	}
+
 	//iterated error state EKF update for measurement as an Eigen matrix whose dimension is changing.
-	//calculate measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) and the noise covariance (R) at the same time, by only one function.
+	//calculate measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) 
+	//and the noise covariance (R) at the same time, by only one function.
 	void update_iterated_dyn_share() {
 		
 		int t = 0;
@@ -1011,8 +1057,8 @@ public:
 		for(int i=-1; i<maximum_iter; i++)
 		{
 			dyn_share.valid = true;
-			h_dyn_share (x_,  dyn_share);
-			//Matrix<scalar_type, Eigen::Dynamic, 1> h = h_dyn_share (x_,  dyn_share);
+			h_dyn_share(x_,  dyn_share);
+			//Matrix<scalar_type, Eigen::Dynamic, 1> h = h_dyn_share(x_,  dyn_share);
 			Matrix<scalar_type, Eigen::Dynamic, 1> z = dyn_share.z;
 			Matrix<scalar_type, Eigen::Dynamic, 1> h = dyn_share.h;
 		#ifdef USE_sparse
@@ -1092,7 +1138,9 @@ public:
 			else
 			{
 			#ifdef USE_sparse
-				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> b = Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Identity(dof_Measurement_noise, dof_Measurement_noise);
+				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> b = 
+					Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Identity(
+						dof_Measurement_noise, dof_Measurement_noise);
 				Eigen::SparseQR<Eigen::SparseMatrix<scalar_type>, Eigen::COLAMDOrdering<int>> solver; 
 				solver.compute(R_);
 				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> R_in_temp = solver.solve(b);
@@ -1295,7 +1343,9 @@ public:
 			else
 			{
 			#ifdef USE_sparse
-				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> b = Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Identity(dof_Measurement_noise, dof_Measurement_noise);
+				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> b = 
+					Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Identity(
+						dof_Measurement_noise, dof_Measurement_noise);
 				Eigen::SparseQR<Eigen::SparseMatrix<scalar_type>, Eigen::COLAMDOrdering<int>> solver; 
 				solver.compute(R_);
 				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> R_in_temp = solver.solve(b);
@@ -1409,7 +1459,8 @@ public:
 
 	//iterated error state EKF update for measurement as a dynamic manifold, whose dimension or type is changing.
 	//the measurement and the measurement model are received in a dynamic manner.
-	//calculate measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) and the noise covariance (R) at the same time, by only one function.
+	//calculate measurement (z), estimate measurement (h), partial differention matrices (h_x, h_v) 
+	//and the noise covariance (R) at the same time, by only one function.
 	template<typename measurement_runtime, typename measurementModel_dyn_runtime_share>
 	void update_iterated_dyn_runtime_share(measurement_runtime z, measurementModel_dyn_runtime_share h) {
 		
@@ -1503,7 +1554,9 @@ public:
 			else
 			{
 			#ifdef USE_sparse
-				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> b = Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Identity(dof_Measurement_noise, dof_Measurement_noise);
+				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> b = 
+					Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Identity(
+						dof_Measurement_noise, dof_Measurement_noise);
 				Eigen::SparseQR<Eigen::SparseMatrix<scalar_type>, Eigen::COLAMDOrdering<int>> solver; 
 				solver.compute(R_);
 				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> R_in_temp = solver.solve(b);
@@ -1615,6 +1668,7 @@ public:
 		}
 	}
 	
+	// 实际使用的接口
 	//iterated error state EKF update modified for one specific system.
 	void update_iterated_dyn_share_modified(double R, double &solve_time) {
 		
@@ -1629,16 +1683,14 @@ public:
 		Matrix<scalar_type, n, 1> K_h;
 		Matrix<scalar_type, n, n> K_x; 
 		
+		// IKF迭代
 		vectorized_state dx_new = vectorized_state::Zero();
 		for(int i=-1; i<maximum_iter; i++)
 		{
 			dyn_share.valid = true;	
 			h_dyn_share(x_, dyn_share);
 
-			if(! dyn_share.valid)
-			{
-				continue; 
-			}
+			if(!dyn_share.valid) { continue; }
 
 			//Matrix<scalar_type, Eigen::Dynamic, 1> h = h_dyn_share(x_, dyn_share);
 			#ifdef USE_sparse
@@ -1704,7 +1756,8 @@ public:
 			/*
 			if(n > dof_Measurement)
 			{
-				K_= P_ * h_x_.transpose() * (h_x_ * P_ * h_x_.transpose()/R + Eigen::Matrix<double, Dynamic, Dynamic>::Identity(dof_Measurement, dof_Measurement)).inverse()/R;
+				K_= P_ * h_x_.transpose() * (h_x_ * P_ * h_x_.transpose()/R 
+					+ Eigen::Matrix<double, Dynamic, Dynamic>::Identity(dof_Measurement, dof_Measurement)).inverse()/R;
 			}
 			else
 			{
@@ -1718,7 +1771,8 @@ public:
 				//Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> K_temp = h_x * P_ * h_x.transpose();
 				//spMt R_temp = h_v * R_ * h_v.transpose();
 				//K_temp += R_temp;
-				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_x_cur = Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Zero(dof_Measurement, n);
+				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_x_cur = 
+					Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Zero(dof_Measurement, n);
 				h_x_cur.topLeftCorner(dof_Measurement, 12) = h_x_;
 				/*
 				h_x_cur.col(0) = h_x_.col(0);
@@ -1735,7 +1789,9 @@ public:
 				h_x_cur.col(11) = h_x_.col(11);
 				*/
 				
-				Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> K_ = P_ * h_x_cur.transpose() * (h_x_cur * P_ * h_x_cur.transpose()/R + Eigen::Matrix<double, Dynamic, Dynamic>::Identity(dof_Measurement, dof_Measurement)).inverse()/R;
+				Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> K_ = 
+					P_ * h_x_cur.transpose() * (h_x_cur * P_ * h_x_cur.transpose()/R 
+					+ Eigen::Matrix<double, Dynamic, Dynamic>::Identity(dof_Measurement, dof_Measurement)).inverse()/R;
 				K_h = K_ * dyn_share.h;
 				K_x = K_ * h_x_cur;
 			//#else
@@ -1752,7 +1808,8 @@ public:
 				P_temp. template block<12, 12>(0, 0) += A;
 				P_temp = P_temp.inverse();
 				/*
-				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_x_cur = Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Zero(dof_Measurement, n);
+				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_x_cur = 
+					Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Zero(dof_Measurement, n);
 				h_x_cur.col(0) = h_x_.col(0);
 				h_x_cur.col(1) = h_x_.col(1);
 				h_x_cur.col(2) = h_x_.col(2);
@@ -1784,7 +1841,8 @@ public:
 				Eigen::Matrix<scalar_type, 12, 12> HTH = h_x_.transpose() * h_x_; 
 				P_temp. template block<12, 12>(0, 0) += HTH;
 				/*
-				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_x_cur = Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Zero(dof_Measurement, n);
+				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_x_cur = 
+					Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Zero(dof_Measurement, n);
 				//std::cout << "line 1767" << std::endl;
 				h_x_cur.col(0) = h_x_.col(0);
 				h_x_cur.col(1) = h_x_.col(1);
@@ -1837,7 +1895,7 @@ public:
 				//std::cout << "iteration time" << t << "," << i << std::endl; 
 				Matrix<scalar_type, 3, 3> res_temp_SO3;
 				MTK::vect<3, scalar_type> seg_SO3;
-				for(typename std::vector<std::pair<int, int> >::iterator it = x_.SO3_state.begin(); it != x_.SO3_state.end(); it++) {
+				for (typename std::vector<std::pair<int, int> >::iterator it = x_.SO3_state.begin(); it != x_.SO3_state.end(); it++) {
 					int idx = (*it).first;
 					for(int i = 0; i < 3; i++){
 						seg_SO3(i) = dx_(i + idx);
@@ -1901,7 +1959,8 @@ public:
 
 				// if(n > dof_Measurement)
 				// {
-				// 	Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_x_cur = Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Zero(dof_Measurement, n);
+				// 	Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_x_cur = 
+				//		Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Zero(dof_Measurement, n);
 				// 	h_x_cur.topLeftCorner(dof_Measurement, 12) = h_x_;
 				// 	/*
 				// 	h_x_cur.col(0) = h_x_.col(0);
@@ -1928,7 +1987,7 @@ public:
 			}
 			solve_time += omp_get_wtime() - solve_start;
 		}
-	}
+	} // 实际使用的接口(函数结束)
 
 	void change_x(state &input_state)
 	{
@@ -1949,10 +2008,13 @@ public:
 	const state& get_x() const {
 		return x_;
 	}
+
 	const cov& get_P() const {
 		return P_;
 	}
+
 private:
+
 	state x_;
 	measurement m_;
 	cov P_;
@@ -1976,7 +2038,8 @@ private:
 	measurementMatrix2_dyn *h_v_dyn;
 
 	measurementModel_share *h_share;
-	measurementModel_dyn_share *h_dyn_share;
+	// measurementModel_dyn_share *h_dyn_share;	// 函数指针是非常不灵活的类型，甚至无法兼容类的(非静态)成员函数
+	measurementModel_dyn_share h_dyn_share;
 
 	int maximum_iter = 0;
 	scalar_type limit[n];
@@ -1999,6 +2062,7 @@ private:
         }
         return temp_vec;
     }
+
 public:
 	EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
