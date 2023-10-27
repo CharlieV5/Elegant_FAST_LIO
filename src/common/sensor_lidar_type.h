@@ -29,11 +29,36 @@ namespace fastlio {
 typedef pcl::PointXYZINormal PointType;
 typedef pcl::PointCloud<PointType> PointCloudXYZI;
 
-enum TIME_UNIT{SEC = 0, MS = 1, US = 2, NS = 3};
-enum LIDAR_TYPE{AVIA = 1, VELO16, OUST64, HESAI128};
-enum FEATURE_TYPE{Nor, Poss_Plane, Real_Plane, Edge_Jump, Edge_Plane, Wire, ZeroPoint};
-enum SURROUND_TYPE{Prev, Next};
-enum E_JUMP_TYPE{Nr_nor, Nr_zero, Nr_180, Nr_inf, Nr_blind};
+enum TIME_UNIT { SEC = 0, MS = 1, US = 2, NS = 3 };
+enum LIDAR_TYPE { AVIA = 1, VELO16, OUST64, HESAI128 };
+enum SURROUND_TYPE { Prev = 0, Next };
+
+enum FEATURE_TYPE {
+  Nor = 0,    // 啥也不是？
+  Poss_Plane, // Possible surf，多见于group的两端点
+  Real_Plane, // Real surf，多见于group中的点
+  Edge_Jump,  // corner，盲猜应该是和Neighbor距离较大的点，也即距离跳跃的edge点
+  Edge_Plane, // corner，尤指两个plane相交形成的edge点
+  Wire,       // 电线或类似形状物体上的点
+  ZeroPoint   // ？
+};
+
+enum E_JUMP_TYPE {  // Edge_Jump点的细分类型（盲猜Nr指的是Neighbor Relation？）
+  Nr_nor = 0, // 啥也不是？
+  Nr_zero,    // 邻点在延长线上
+  Nr_180,     // 邻点在原点到当前点(OA)的连线上
+  Nr_inf,     // 邻点与当前点存在大的距离跳变（理解为方向与射线方向重合？）
+  Nr_blind    // 邻点在盲区，自点实际不在盲区，但也判为在盲区
+};
+
+// 输出point时间单位类型的字符串
+inline std::string ToTimeUnitString(const int& type) {
+  if (type == TIME_UNIT::SEC) return "SEC";
+  if (type == TIME_UNIT::MS) return "MS";
+  if (type == TIME_UNIT::US) return "US";
+  if (type == TIME_UNIT::NS) return "NS";
+  return "UnknownTimeUnit";
+}
 
 // 输出雷达类型的字符串
 inline std::string ToLidarString(const LIDAR_TYPE& type) {
@@ -41,7 +66,7 @@ inline std::string ToLidarString(const LIDAR_TYPE& type) {
   if (type == LIDAR_TYPE::VELO16) return "VELO16";
   if (type == LIDAR_TYPE::OUST64) return "OUST64";
   if (type == LIDAR_TYPE::HESAI128) return "HESAI128";
-  return "unknown lidar type!";
+  return "UnknownLidar";
 }
 
 inline std::string ToLidarString(const int& type) {
@@ -49,24 +74,24 @@ inline std::string ToLidarString(const int& type) {
   if (type == LIDAR_TYPE::VELO16) return "VELO16";
   if (type == LIDAR_TYPE::OUST64) return "OUST64";
   if (type == LIDAR_TYPE::HESAI128) return "HESAI128";
-  return "unknown lidar type!";
+  return "UnknownLidar";
 }
 
 /// @brief 具体指的是(LiDAR)预处理的类型？
 struct OrgType
 {
-  double range;
-  double dista; 
-  double angle[2];
-  double intersect;
-  E_JUMP_TYPE edj[2];
-  FEATURE_TYPE ftype;
+  double range = 0; // 本点的range
+  double dista = 0; // 到邻点(通常取next)的距离的平方
+  double angle[2];  // 前后邻点的角度
+  double intersect;   //向量AB与向量AC的夹角(的cos值)
+  FEATURE_TYPE ftype; //当前点的类型
+  E_JUMP_TYPE edj[2]; //前后邻点的EdgeJump类型
   OrgType()
   {
     range = 0;
+    ftype = Nor; // 默认值
     edj[Prev] = Nr_nor;
     edj[Next] = Nr_nor;
-    ftype = Nor;
     intersect = 2;
   }
 };
@@ -116,7 +141,7 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(ouster_pcl::Point,
     (std::uint32_t, range, range)
 )
 
-namespace lidar128_pcl {
+namespace hesai_pcl {
   struct EIGEN_ALIGN16 Point {
       PCL_ADD_POINT4D;
       float intensity;
@@ -128,7 +153,7 @@ namespace lidar128_pcl {
   };
 }
 
-POINT_CLOUD_REGISTER_POINT_STRUCT(lidar128_pcl::Point,
+POINT_CLOUD_REGISTER_POINT_STRUCT(hesai_pcl::Point,
     (float, x, x)
     (float, y, y)
     (float, z, z)

@@ -101,24 +101,24 @@ catkin_package(
 )
 
 ## 编译目标 [ ********* Old Version ********* ]
-add_executable(fastlio_mapping 
-  src/laser_mapping.cpp 
-  src/lidar_preprocess.cpp
-  src/ikd-Tree/ikd_Tree.cpp 
-  src/common/options.cpp
-  src/core/imu_process.cpp
-  src/io/yaml_io.cpp
-  src/fast_lio.cpp
-)
-target_link_libraries(fastlio_mapping 
-  ${catkin_LIBRARIES} 
-  ${PCL_LIBRARIES} 
-  ${PYTHON_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-)
-target_include_directories(fastlio_mapping PRIVATE 
-  ${PYTHON_INCLUDE_DIRS}
-)
+# add_executable(fastlio_mapping 
+#   src/laser_mapping.cpp 
+#   src/lidar_preprocess.cpp
+#   src/ikd-Tree/ikd_Tree.cpp 
+#   src/common/options.cpp
+#   src/core/imu_process.cpp
+#   src/io/yaml_io.cpp
+#   src/fast_lio.cpp
+# )
+# target_link_libraries(fastlio_mapping 
+#   ${catkin_LIBRARIES} 
+#   ${PCL_LIBRARIES} 
+#   ${PYTHON_LIBRARIES}
+#   ${YAML_CPP_LIBRARIES}
+# )
+# target_include_directories(fastlio_mapping PRIVATE 
+#   ${PYTHON_INCLUDE_DIRS}
+# )
 
 ## 编译目标 [ ********* New Version ********* ]
 add_executable(run_fast_lio_node

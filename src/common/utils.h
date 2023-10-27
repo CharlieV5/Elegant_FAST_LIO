@@ -9,6 +9,8 @@
 #include "common/common_lib.h"
 #include "IKFoM_toolkit/use_ikfom.hpp"
 
+#include <unordered_map>
+
 
 namespace fastlio {
 } // namespace fastlio
@@ -48,6 +50,87 @@ inline void PointLidarToBodyIMU(PointType const * const pi, PointType * const po
     po->intensity = pi->intensity;
 }
 
+template<typename T>
+Eigen::Matrix<T, 3, 3> EulerToMatrix(T roll, T pitch, T yaw) {
+    // Eigen::Vector3d::UnitX();
+    // Eigen::AngleAxisd(1, Eigen::Vector3d::UnitX()).toRotationMatrix();
+    Eigen::Matrix<T, 3, 3> rotation =
+        (Eigen::AngleAxis<T>(roll, Eigen::Matrix<T, 3, 1>::UnitX()) * 
+        Eigen::AngleAxis<T>(pitch, Eigen::Matrix<T, 3, 1>::UnitY()) * 
+        Eigen::AngleAxis<T>(yaw, Eigen::Matrix<T, 3, 1>::UnitZ())).toRotationMatrix();
+    return rotation;
+}
+
+// Eigen::AngleAxisd(1.0, Eigen::Vector3d::UnitX()) * 
+// Eigen::Vector3<T>
+// Eigen::Matrix<T, 3, 1>::UnitX();
+
+
+template<typename PT>
+class VoxelDownsampler {
+   public:
+    VoxelDownsampler() {}
+    ~VoxelDownsampler() {}
+
+    /// @brief 0:几何中心最近点，1:均值点
+    bool SetStrategy(const int& method = 0) {
+        if (method < 0 || method > 1) { return false; }
+        strategy_ = method;
+        return true;
+    }
+
+    void setLeafSize(float lx, float ly, float lz) {
+        //
+    }
+
+    // void setInputCloud(const CloudType& input) {
+    //     //
+    // }
+
+    // void filter(CloudType& output) {
+    //     //
+    // }
+
+    void setInputCloud(const pcl::PointCloud<PT>& input) {
+        //
+    }
+
+    void filter(pcl::PointCloud<PT>& output) {
+        //
+    }
+
+   private:
+    float lx_ = 0.1;
+    float ly_ = 0.1;
+    float lz_ = 0.1;
+    int strategy_ = 0;
+
+    struct LeafType {
+        int n = 0;
+        PT pt_ = PT();
+        Eigen::Vector4f sum_ = Eigen::Vector4f::Zero();
+        Eigen::Vector4f centroid_ = Eigen::Vector4f::Zero();
+
+        LeafType(/*3D index*/) {/*compute centroid.*/}
+
+        void AddPoint(const PT& pt, const int method) {
+            if (n == 0) { pt_ = pt; }
+            if (method == 0) {
+                // closest
+            }
+            else if (method == 1) {
+                // mean
+            }
+        }
+
+        // PT GetPoint() {
+        //     return pt_;
+        // }
+    };
+
+    std::unordered_map<size_t, LeafType> leaves_;
+
+};
 
 
 

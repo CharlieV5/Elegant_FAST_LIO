@@ -16,6 +16,7 @@ namespace options {
 extern std::string opt_root_directory;
 extern std::string opt_map_file_path;
 extern bool   opt_enable_runtime_logging;
+extern bool   opt_colorize_output_features;
 
 inline std::string GetFilePath(const std::string& file_name) 
 { return std::string(std::string(opt_root_directory) + "Log/"+ file_name); }

@@ -252,9 +252,9 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, IeskfomType &kf_state, P
     acc_imu << VEC_FROM_ARRAY(tail->acc);
     gyro_ave << VEC_FROM_ARRAY(tail->gyr);
 
-    for(; it_pcl->curvature / double(1000) > head->offset_time; it_pcl --)
+    for(; it_pcl->curvature / double(1000)/*时间单位回到秒*/ > head->offset_time; it_pcl --)
     {
-      dt = it_pcl->curvature / double(1000) - head->offset_time;
+      dt = it_pcl->curvature / double(1000)/*时间单位回到秒*/ - head->offset_time;
 
       /* Transform to the 'end' frame, using only the rotation //运动补偿:只使用了旋转
        * Note: Compensation direction is INVERSE of Frame's moving direction
@@ -290,10 +290,10 @@ bool ImuProcess::Process(const MeasureGroup &meas,  IeskfomType &kf_state, Point
   }
   assert(meas.lidar != nullptr);
 
-  static size_t lifelong_counts = 0;
-  lifelong_counts++;
-  std::cout << "ImuProcess: process with imu num: " << meas.imu_queue.size() 
-    << " [seq=" << lifelong_counts << "]" << std::endl;
+  static size_t process_cnts = 0;
+  process_cnts++;
+  std::cout << "[ Imu Process ] process with imu counts " << meas.imu_queue.size() 
+    << ", seq=" << process_cnts << std::endl;
 
   /// 初始化IMUProc
   if (imu_need_init_)
@@ -314,7 +314,7 @@ bool ImuProcess::Process(const MeasureGroup &meas,  IeskfomType &kf_state, Point
       // 搞不懂，Init函数里估算了cov，但这里又重置为了人为设定的cov值
       cov_acc_esti = cov_acc_fixed;
       cov_gyro_esti = cov_gyro_fixed;
-      std::cout << "ImuProcess: Initialization Done." << std::endl;
+      std::cout << "[ Imu Process ] Initialization Done." << std::endl;
       // ROS_INFO("IMU Initial Done: Gravity: %.4f %.4f %.4f %.4f; state.bias_g: %.4f %.4f %.4f; acc covarience: %.8f %.8f %.8f; gry covarience: %.8f %.8f %.8f",\
       //          imu_state.grav[0], imu_state.grav[1], imu_state.grav[2], mean_acc.norm(), cov_bias_gyro[0], cov_bias_gyro[1], cov_bias_gyro[2], \
       //          cov_acc_esti[0], cov_acc_esti[1], cov_acc_esti[2], cov_gyro_esti[0], cov_gyro_esti[1], cov_gyro_esti[2]);

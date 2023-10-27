@@ -10,6 +10,7 @@
 #include <thread>
 #include <fstream>
 #include <csignal>
+#include <cstdlib>  // rand()
 #include <condition_variable>
 #include <functional> // std::bind, std::function
 
@@ -34,8 +35,37 @@ namespace fastlio {
 } // namespace fastlio
 
 struct RunningStatus {
-    // 1. 状态量
-    // 2. 各种耗时
+    /** 1. 状态量
+     * P, V, Q, Ba, Bg, G, TimeOffset
+    */
+    bool valid_ = false;
+    double timestamp_ = 0;
+    size_t seq = 0;
+    V3D position_ = V3D::Zero();
+    V3D velocity_ = V3D::Zero();
+    M3D orientation_ = M3D::Identity();
+    V3D bias_acc_ = V3D::Zero();
+    V3D bias_gyr_ = V3D::Zero();
+    double time_offset_ = 0;
+
+    /** 2. 各种耗时
+     * 预处理（IMU处理+点云运动补偿、ikdtree动态裁剪、点云降采样）
+     * ikdtree初始化+可视化
+     * ieskf算法
+     * ikdtree更新
+    */
+    double imuproc_ = 0;
+    double ikdtree_trim_ = 0;
+    double input_dsample_ = 0;
+    double visualize_map_ = 0;
+    double ieskf_proc_ = 0;
+    double ieskf_part1_ = 0;
+    double ieskf_part2_ = 0;
+    double ieskf_part3_ = 0;
+    double ieskf_part4_ = 0;
+    double ikdtree_update_ = 0;
+
+    RunningStatus() {}
 };
 
 
@@ -52,6 +82,14 @@ class FastLio {
     // void SetExtrinsic(const V3D& lidar2imu_T, const M3D& lidar2imu_R);
     // void EnableRuntimeLogging(const bool& enable);
 
+    void AddReceivedScanCount() { received_scan_count++; }
+    void AddLidarPreprocTime(const double stamp, const double preproc_time) 
+    { 
+        G_lidar_preproc_count++;
+        G_lidar_preproc_stamp = stamp;
+        G_lidar_preproc_time = preproc_time;
+    }
+
     // 运行一次LIO的入口
     bool ProcessMeasurements(MeasureGroup& measures_);
 
@@ -64,7 +102,12 @@ class FastLio {
     PointCloudXYZI::Ptr GetKfPointsDeskewed() { return laser_features_deskewed_; }
     PointCloudXYZI::Ptr GetKfPointsDsampled() { return features_dsampled_in_body_; }
     PointCloudXYZI::Ptr GetKfPointsMatched() { return laser_features_matched_; }
-    size_t GetNumMatchedFeatures() { if (laser_features_matched_) { return laser_features_matched_->size(); } return 0; }
+    size_t GetNumMatchedFeatures() { return laser_features_matched_->size(); }
+
+    // 获取local map中匹配到的点云
+    bool IsMatchedMapPointsUpdated() { bool is_updated = matched_map_pts_updated; matched_map_pts_updated = false; return is_updated; }
+    void EnableMatchedMapPoints(const bool& enable) { visulize_matched_map_pts = enable; }
+    PointCloudXYZI::Ptr GetMatchedMapPoints() { return map_points_matched_; }
 
     // 获取ikdtree(local map)点云
     bool IsIkdtreePointsUpdated() { bool is_updated = ikdtree_points_updated; ikdtree_points_updated = false; return is_updated; }
@@ -72,7 +115,7 @@ class FastLio {
     PointCloudXYZI::Ptr GetIkdtreePoints() { return points_from_ikdtree_; }
 
     // 获取运行状态信息
-    // RunningStatus GetRunningStatus();
+    RunningStatus GetRunningStatus() { return running_status_; }
 
     // 后处理
     void SavePcdsIfNecessary(const bool final_saving = false);
@@ -98,13 +141,20 @@ class FastLio {
         fflush(fp);
     }
 
-    // 该函数提供一个指定接口的计算xxx的范式(作为一个函数对象被传递到EKF滤波器中)，在EKF中作为{观测模型}使用
+    // 该函数提供一个指定接口的计算xxx的范式(作为一个函数对象被传递到EKF滤波器中)，在EKF中作为{观测模型}使用，在EKF中被迭代调用
     void h_share_model(state_ikfom &ikfom_state, esekfom::dyn_share_datastruct<double> &ekfom_data)
     {
+        G_ieskf_ites_++;
         double match_start = omp_get_wtime();
+
+        // 重置变量
         laser_features_matched_->clear(); 
         matched_norms_->clear(); 
         total_residual = 0.0; 
+        bool association_updated = false;
+
+        // std::cout << "[debug] executing H_Share_Model func, ekfom data: " 
+        //     << ekfom_data.valid << ", " << ekfom_data.converge << std::endl;
 
         // 核心：为每个surf-feature点寻找近邻，拟合平面，计算点到面残差
         #ifdef MP_EN /*支持OMP并行加速*/
@@ -127,21 +177,25 @@ class FastLio {
             // 为feature寻找和记录近邻点
             std::vector<float> pointSearchSqDis(NUM_MATCH_POINTS);
             auto& neighbor_points = features_nearest_neighbors[i];
-            if (ekfom_data.converge)
+            /*这个converge与否，是被ieskf框架控制的一个变量，当需要重新搜索association关系时，就会置true，从而重新搜索近邻*/
+            if (ekfom_data.converge) 
             {
                 iKdTree.Nearest_Search(point_world, NUM_MATCH_POINTS, neighbor_points, pointSearchSqDis);
                 features_matched_info[i] = neighbor_points.size() < NUM_MATCH_POINTS ? false 
-                                            : pointSearchSqDis[NUM_MATCH_POINTS - 1] > 5 ? false : true;
+                    : pointSearchSqDis[NUM_MATCH_POINTS - 1] > 5 ? false : true;
+                /*条件：满足2.236米(sq=5)之内有5个近邻点*/
+                association_updated = true;
             }
 
             if (!features_matched_info[i]) continue;
 
-            // 用feature的近邻点拟合平面，评估平面拟合质量，并计算点到面误差【严格的match标准】
+            // 用feature的近邻点拟合线面特征，评估特征拟合质量，并计算点到特征的误差【严格的match标准】
             VF(4) pabcd;
             features_matched_info[i] = false;
             if (estimatePlane(pabcd, neighbor_points, 0.1f)) {
                 float pd2 = pabcd(0) * point_world.x + pabcd(1) * point_world.y + pabcd(2) * point_world.z + pabcd(3);
-                float s = 1 - 0.9 * fabs(pd2) / sqrt(p_body.norm());
+                float s = 1 - 0.9 * fabs(pd2) / sqrt(p_body.norm()); 
+                /*几何意义也是清晰的，实质上评价了{点面距离}与{点的range}之比；当range较大时，放宽有效点面距离的阈值*/
 
                 if (s > 0.9) {
                     features_matched_info[i] = true;
@@ -150,6 +204,23 @@ class FastLio {
                     features_norms_info->points[i].z = pabcd(2);
                     features_norms_info->points[i].intensity = pd2; // intensity用来保存截距
                     features_residuals_info[i] = abs(pd2);
+
+                    // if (visulize_matched_map_pts && association_updated) {
+                    //     auto NN_points = features_nearest_neighbors[i];
+                    //     std::cout << "NN(" << NN_points.size() << ") ";
+                    //     int intensity_value = (rand() % (255))+ 1;
+                    //     PointType pt_to_save;
+                    //     pt_to_save.intensity = intensity_value;
+                    //     for (int j = 0; j < NUM_MATCH_POINTS; j++)
+                    //     {
+                    //         pt_to_save.x = NN_points[j].x;
+                    //         pt_to_save.y = NN_points[j].y;
+                    //         pt_to_save.z = NN_points[j].z;
+                    //         /// NOTE: 一个坑：貌似omp多线程加速的代码段中，不能对全局变量(如下)无保护读写，会引发double free！！
+                    //         map_points_matched_->points.push_back(pt_to_save); 
+                    //     }
+                    //     matched_map_pts_updated = true;
+                    // }
                 }
             }
         }
@@ -158,12 +229,13 @@ class FastLio {
         G_num_matched_features = 0;
         for (int i = 0; i < G_num_dsampled_features; i++) {
             if (features_matched_info[i]) {
-                laser_features_matched_->points[G_num_matched_features] = features_dsampled_in_body_->points[i];
-                matched_norms_->points[G_num_matched_features] = features_norms_info->points[i];
+                laser_features_matched_->points[G_num_matched_features] = features_dsampled_in_body_->points[i]; //这。。不会core dump吗？？
+                matched_norms_->points[G_num_matched_features] = features_norms_info->points[i];                 //这。。不会core dump吗？？
                 total_residual += features_residuals_info[i];
                 G_num_matched_features ++;
             }
         }
+        // std::cout << "[debug] num matched features: " << G_num_matched_features << std::endl;
 
         if (G_num_matched_features < 1)
         {
@@ -172,12 +244,34 @@ class FastLio {
             return;
         }
 
+        // 收集match到的地图点 (optional)
+        if (visulize_matched_map_pts && association_updated) 
+        {
+            map_points_matched_->clear();
+            for (int i = 0; i < G_num_dsampled_features; i++) {
+                if (features_matched_info[i]) {
+                    const auto& NN_points = features_nearest_neighbors[i];
+                    int intensity_value = (rand() % (255))+ 1;
+                    PointType pt_to_save;
+                    pt_to_save.intensity = intensity_value;
+                    for (size_t j = 0; j < NN_points.size(); j++) {
+                        pt_to_save.x = NN_points[j].x;
+                        pt_to_save.y = NN_points[j].y;
+                        pt_to_save.z = NN_points[j].z;
+                        map_points_matched_->points.push_back(pt_to_save); 
+                    }
+                }
+            }
+            matched_map_pts_updated = true;
+            // std::cout << "[debug] num matched map points: " << map_points_matched_->size() << std::endl;
+        }
+
         residual_mean_last = total_residual / G_num_matched_features;
-        match_time  += omp_get_wtime() - match_start;
-        double solve_start_  = omp_get_wtime();
+        G_match_time  += omp_get_wtime() - match_start;
 
         // 计算雅可比矩阵（h_x）和残差向量（h）
         // Computation of Measuremnt Jacobian matrix H and Measurents Vector
+        double solve_start_  = omp_get_wtime();
         ekfom_data.h_x = Eigen::MatrixXd::Zero(G_num_matched_features, 12); //23
         ekfom_data.h.resize(G_num_matched_features);
 
@@ -212,7 +306,7 @@ class FastLio {
             /*** Measuremnt: distance to the closest surface ***/
             ekfom_data.h(i) = -norm_p.intensity;
         }
-        solve_time += omp_get_wtime() - solve_start_;
+        G_solve_time += omp_get_wtime() - solve_start_;
     }
 
     void UpdateIkdtreeMap()
@@ -232,23 +326,23 @@ class FastLio {
                 bool need_add = true;
                 ikdtreeNS::BoxPointType Box_of_Point; //unused
                 PointType downsample_result; //unused
-                PointType box_center; 
-                double kIkdtreeVfSize = fastlio::options::opt_vf_size_map;
-                box_center.x = floor(features_dsampled_in_world_->points[i].x / kIkdtreeVfSize) * kIkdtreeVfSize + 0.5 * kIkdtreeVfSize;
-                box_center.y = floor(features_dsampled_in_world_->points[i].y / kIkdtreeVfSize) * kIkdtreeVfSize + 0.5 * kIkdtreeVfSize;
-                box_center.z = floor(features_dsampled_in_world_->points[i].z / kIkdtreeVfSize) * kIkdtreeVfSize + 0.5 * kIkdtreeVfSize;
-                float dist  = computeDistance(features_dsampled_in_world_->points[i], box_center);
+                PointType box_centroid; 
+                double KMapVfSize = fastlio::options::opt_vf_size_map;
+                box_centroid.x = floor(features_dsampled_in_world_->points[i].x / KMapVfSize) * KMapVfSize + 0.5 * KMapVfSize;
+                box_centroid.y = floor(features_dsampled_in_world_->points[i].y / KMapVfSize) * KMapVfSize + 0.5 * KMapVfSize;
+                box_centroid.z = floor(features_dsampled_in_world_->points[i].z / KMapVfSize) * KMapVfSize + 0.5 * KMapVfSize;
+                float dist  = computeDistance(features_dsampled_in_world_->points[i], box_centroid);
                 // 如果feature的最近邻都不在feature所在box中，证明一定要添加这个feature
-                if (fabs(neighbor_points[0].x - box_center.x) > 0.5 * kIkdtreeVfSize 
-                    && fabs(neighbor_points[0].y - box_center.y) > 0.5 * kIkdtreeVfSize 
-                    && fabs(neighbor_points[0].z - box_center.z) > 0.5 * kIkdtreeVfSize ) {
+                if (fabs(neighbor_points[0].x - box_centroid.x) > 0.5 * KMapVfSize 
+                    && fabs(neighbor_points[0].y - box_centroid.y) > 0.5 * KMapVfSize 
+                    && fabs(neighbor_points[0].z - box_centroid.z) > 0.5 * KMapVfSize ) {
                     PointsNoNeedDownSample.push_back(features_dsampled_in_world_->points[i]);
                     continue;
                 }
                 // 如果存在某个近邻，比当前feature更接近box中心，则没必要添加这个feature
                 for (int readd_i = 0; readd_i < NUM_MATCH_POINTS; readd_i ++) {
-                    if (neighbor_points.size() < NUM_MATCH_POINTS) break;
-                    if (computeDistance(neighbor_points[readd_i], box_center) < dist) {
+                    if (neighbor_points.size() < NUM_MATCH_POINTS) { break; }
+                    if (computeDistance(neighbor_points[readd_i], box_centroid) < dist) {
                         need_add = false;
                         break;
                     }
@@ -265,9 +359,9 @@ class FastLio {
         }
 
         double kdtree_start_time_point = omp_get_wtime();
-        num_added_points = iKdTree.Add_Points(PointsToAdd, /*downsample=*/true);
+        iKdTree.Add_Points(PointsToAdd, /*downsample=*/true);
         iKdTree.Add_Points(PointsNoNeedDownSample, /*downsample=*/false); 
-        num_added_points = PointsToAdd.size() + PointsNoNeedDownSample.size();
+        G_num_added_points = PointsToAdd.size() + PointsNoNeedDownSample.size(); /*还是都加了啊，有点奇怪*/
         kdtree_incremental_time = omp_get_wtime() - kdtree_start_time_point;
     }
 
@@ -352,53 +446,70 @@ class FastLio {
    public: // ========================== 公有成员 ========================== //
 
     // 保存地图
-    PointCloudXYZI::Ptr pcl_wait_save = nullptr; //(new PointCloudXYZI());
+    PointCloudXYZI::Ptr pcl_wait_save = nullptr;
     int    pcd_file_id = 0;
 
+    // IESKF Log Variables
+    int G_ieskf_ites_ = 0;
+
     // Time Log Variables
+    int    G_lidar_preproc_count = 0;           // 类外访问
+    double G_lidar_preproc_stamp = 0;           // 类外访问
+    double G_lidar_preproc_time = 0;            // 类外访问
+    double G_match_time = 0, G_solve_time = 0;  /*IESKF迭代中的耗时由这两个部分构成*/
+    double G_solve_const_H_time = 0;            /*未启用*/
     int    frame_num = 0;
     double avg_time_consu = 0, avg_time_icp = 0, avg_time_match = 0;
     double avg_time_incre = 0, avg_time_solve = 0, avg_time_const_H_time = 0;
+    
+    double G_kdtree_search_time = 0.0;          /*未启用*/
+    double kdtree_incremental_time = 0.0, kdtree_delete_time = 0.0;
+    int    kdtree_size_st = 0, kdtree_size_end = 0, num_deleted_points = 0;
+    int    G_num_added_points = 0;
 
-    double kdtree_incremental_time = 0.0, kdtree_search_time = 0.0, kdtree_delete_time = 0.0;
-    double T1[kMaxLogN], s_plot[kMaxLogN], s_plot2[kMaxLogN], s_plot3[kMaxLogN], s_plot4[kMaxLogN], s_plot5[kMaxLogN];
-    double s_plot6[kMaxLogN], s_plot7[kMaxLogN], s_plot8[kMaxLogN], s_plot9[kMaxLogN], s_plot10[kMaxLogN];
-    double s_plot11[kMaxLogN]; // 预处理耗时统计(位于ros层)
-    double match_time = 0, solve_time = 0, solve_const_H_time = 0;
-    int    kdtree_size_st = 0, kdtree_size_end = 0, num_added_points = 0, num_deleted_points = 0; /*kdtree_delete_counter*/
+    double T1[kMaxLogN];
+    double s_plot01[kMaxLogN], s_plot02[kMaxLogN], s_plot03[kMaxLogN], s_plot04[kMaxLogN];
+    double s_plot05[kMaxLogN], s_plot06[kMaxLogN], s_plot07[kMaxLogN], s_plot08[kMaxLogN];
+    double s_plot09[kMaxLogN], s_plot10[kMaxLogN], s_plot11[kMaxLogN]; // Lidar预处理耗时统计(在ros层)
 
     // 逻辑：类内变量
-    bool   flag_first_scan = true, flag_SCAN_inited = false;
-    double G_first_lidar_time = 0.0, G_lidar_end_time = 0, G_total_distance = 0;
-    int    received_scan_count = 0, logging_count = 0;
-    int    iterCount = 0, laserCloudValidNum = 0;
-    double residual_mean_last = 0.05, total_residual = 0.0;
-
-    // 预处理
-    pcl::VoxelGrid<PointType> downSizeFilterSurf;
-    pcl::VoxelGrid<PointType> downSizeFilterMap;
+    bool   flag_first_scan = true;      // 系统是否接收到首帧Scan
+    double G_first_lidar_time = 0.0;    // 系统接收到首帧Scan的时间戳
+    bool   flag_SCAN_inited = false;    // 首帧Scan一定时间之后置true
+    int    received_scan_count = 0;     // 类外访问
+    double G_lidar_end_time = 0;        // 类外访问
+    double G_total_distance = 0;        // unused.
+    int    logging_count = 0;
+    int    iterCount = 0;
+    int    laserCloudValidNum = 0;
+    double residual_mean_last = 0.05;
+    double total_residual = 0.0;
 
     // 特征点云
+    int    G_num_input_features = 0;    // 输入的点的数量
     int    G_num_dsampled_features = 0; // 预处理后的scan降采样后才能给到算法用
     int    G_num_matched_features = 0;  // 一个观测单元中，所有match成功的feature的数量 
-    PointCloudXYZI::Ptr laser_features_deskewed_ = nullptr; //(new PointCloudXYZI());   // 预处理(会跳点!)后经运动补偿且转移到IMU系的所有点
-    PointCloudXYZI::Ptr features_dsampled_in_body_ = nullptr; //(new PointCloudXYZI()); // 体素降采样后的点，也是算法真正用的点
-    PointCloudXYZI::Ptr features_dsampled_in_world_ = nullptr; //(new PointCloudXYZI());// 和body系下的点一一对应，会被酌情添加到ikdtree地图中
+    PointCloudXYZI::Ptr laser_features_deskewed_ = nullptr;    // 预处理(会跳点!)后经运动补偿且转移到IMU系的所有点
+    PointCloudXYZI::Ptr features_dsampled_in_body_ = nullptr;  // 体素降采样后的点，也是算法真正用的点
+    PointCloudXYZI::Ptr features_dsampled_in_world_ = nullptr; // 和body系下的点一一对应，会被酌情添加到ikdtree地图中
 
     // 是否关联到了有效平面(也即match)
-    std::vector<PointVector>  features_nearest_neighbors;    // 保存每个feature点的NN近邻点
-    bool features_matched_info[100000] = {0};           // 各个feature是否成功match（在kdtree中的近邻形成了有效平面）的标签
-    float features_residuals_info[100000] = {0.0};      // 所有match点的点面距离残差
-    PointCloudXYZI::Ptr features_norms_info = nullptr; //(new PointCloudXYZI(100000, 1));
-    PointCloudXYZI::Ptr laser_features_matched_ = nullptr; //(new PointCloudXYZI(100000, 1)); // 成功match的特征点
-    PointCloudXYZI::Ptr matched_norms_ = nullptr; //(new PointCloudXYZI(100000, 1));
-    PointCloudXYZI::Ptr features_arrayed_ = nullptr; //; // unused, 存储从ikdtree中remove掉的点，大概是用于debug
+    std::vector<PointVector>  features_nearest_neighbors;   // 保存每个feature点的NN近邻点
+    bool features_matched_info[100000] = {0};               // 各个feature是否成功match（在kdtree中的近邻形成了有效平面）的标签
+    float features_residuals_info[100000] = {0.0};          // 所有match点的点面距离残差
+    PointCloudXYZI::Ptr features_norms_info = nullptr;      //(new PointCloudXYZI(100000, 1));
+    PointCloudXYZI::Ptr laser_features_matched_ = nullptr;  //(new PointCloudXYZI(100000, 1)); // match成功的特征点
+    PointCloudXYZI::Ptr matched_norms_ = nullptr;           //(new PointCloudXYZI(100000, 1));
+    PointCloudXYZI::Ptr features_arrayed_ = nullptr;        // unused, 存储从ikdtree中remove掉的点，大概是用于debug
 
     // ikdtree相关
+    bool visulize_matched_map_pts = false;
+    bool matched_map_pts_updated = false;
+    PointCloudXYZI::Ptr map_points_matched_ = nullptr;      // match到的地图点可视化
     bool visulize_ikdtree_points = false;
     bool ikdtree_points_updated = false;
-    PointCloudXYZI::Ptr points_from_ikdtree_ = nullptr; //(new PointCloudXYZI()); // ikdtree点云地图可视化
-    std::vector<ikdtreeNS::BoxPointType> boxes_need_remove;     // 每次trim localmap时，需要被裁剪掉的区域
+    PointCloudXYZI::Ptr points_from_ikdtree_ = nullptr;     // ikdtree点云地图可视化
+    std::vector<ikdtreeNS::BoxPointType> boxes_need_remove; // 每次trim localmap时需要被裁剪掉的区域
 
     // 未启用
     V3F XAxisPoint_body = V3F(LIDAR_SP_LEN, 0.0, 0.0);
@@ -406,7 +517,7 @@ class FastLio {
 
     // 算法设施
     ikdtreeNS::KD_TREE<PointType> iKdTree;
-    std::shared_ptr<ImuProcess> imu_processor_ = nullptr; //(new ImuProcess());
+    std::shared_ptr<ImuProcess> imu_processor_ = nullptr;
 
     // EKF相关
     IeskfomType ieskf_estimator_;
@@ -419,9 +530,15 @@ class FastLio {
     FILE *fp_lio_state;
     std::ofstream fout_pre, fout_out, fout_dbg;
 
+    // 系统运行状态监控
+    RunningStatus running_status_;
+
 
    private: // ========================== 私有函数 ========================== //
-    // 
+    // 预处理
+    pcl::VoxelGrid<PointType> downSizeFilterSurf;   // used.
+    pcl::VoxelGrid<PointType> downSizeFilterMap;    // unused.
+    VoxelDownsampler<PointType> voxelFilterFeatures;
 
 
    private: // ========================== 私有成员 ========================== //

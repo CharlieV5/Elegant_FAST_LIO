@@ -11,6 +11,7 @@ namespace options {
 std::string opt_root_directory = "";
 std::string opt_map_file_path = "";
 bool   opt_enable_runtime_logging = false;
+bool   opt_colorize_output_features = true;
 
 // extrinsics part.
 double opt_time_offset_lidar_to_imu = 0.0;

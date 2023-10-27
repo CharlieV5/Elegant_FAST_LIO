@@ -269,22 +269,28 @@ bool estimatePlane(Eigen::Matrix<T, 4, 1> &pca_result, const PointVector &point,
         A(j,2) = point[j].z;
     }
 
+    // 以下，解超定线性方程组【等价于最小二乘】ax+by+cz+d=0【等价于a'x+b'y+c'z=-1，其中a'=a/d，b'和c'同理】，获得{a,b,c,d}
     Eigen::Matrix<T, 3, 1> normvec = A.colPivHouseholderQr().solve(b);
 
     T n = normvec.norm();
-    pca_result(0) = normvec(0) / n;
-    pca_result(1) = normvec(1) / n;
-    pca_result(2) = normvec(2) / n;
-    pca_result(3) = 1.0 / n;
+    pca_result(0) = normvec(0) / n;     // a
+    pca_result(1) = normvec(1) / n;     // b
+    pca_result(2) = normvec(2) / n;     // c
+    pca_result(3) = 1.0 / n;            // d
 
     for (int j = 0; j < NUM_MATCH_POINTS; j++)
     {
-        if (fabs(pca_result(0) * point[j].x + pca_result(1) * point[j].y + pca_result(2) * point[j].z + pca_result(3)) > threshold)
+        // 校验平面有效性：如果有某个点到平面的距离超过阈值（通常是0.1米），则认为不构成有效特征。
+        if (fabs(pca_result(0) * point[j].x + pca_result(1) * point[j].y 
+            + pca_result(2) * point[j].z + pca_result(3)) > threshold )
         {
             return false;
         }
     }
     return true;
+
+    /** 评价：当返回true时，实质上兼容了面特征和线特征，因为无论点的空间分布如何（面或线或中间态），
+     * 超定方程组都会给出一个解；而最后一步的平面有效性检验，只是排除了中间态，是允许共面以及共线的。*/
 }
 
 

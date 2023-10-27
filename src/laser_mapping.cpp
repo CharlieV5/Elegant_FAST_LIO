@@ -527,7 +527,7 @@ void HandleLivoxPointCloudMsg(const livox_ros_driver::CustomMsg::ConstPtr &msg)
     condition_var_.notify_all();
 }
 
-void HandleAT128PointCloudMsg()
+void HandleHesai128PointCloudMsg()
 {
     // TODO
 }
@@ -891,9 +891,9 @@ int main(int argc, char** argv)
     fout_out.open(DEBUG_FILE_DIR("mat_out.txt"),std::ios::out);
     fout_dbg.open(DEBUG_FILE_DIR("dbg.txt"),std::ios::out);
     if (fout_pre && fout_out) {
-        std::cout << "~~~~" << fastlio::options::opt_root_directory << " file opened" << std::endl;
+        std::cout << " [ root directory ] " << fastlio::options::opt_root_directory << " files opened." << std::endl;
     } else {
-        std::cout << "~~~~" << fastlio::options::opt_root_directory << " doesn't exist" << std::endl;
+        std::cout << " [ root directory ] " << fastlio::options::opt_root_directory << " doesn't exist." << std::endl;
     }
 
 
@@ -904,8 +904,8 @@ int main(int argc, char** argv)
     ros::Subscriber sub_imu = nh.subscribe(imu_topic_name_, 200000, HandleImuMsg);
 
     // publishers
-    pubLaserCloudRegistered = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered", 100000);
-    pubLaserCloudRegisInBody = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered_body", 100000);
+    pubLaserCloudRegistered = nh.advertise<sensor_msgs::PointCloud2>("/cloud_deskewed", 100000);
+    pubLaserCloudRegisInBody = nh.advertise<sensor_msgs::PointCloud2>("/cloud_deskewed_body", 100000);
     pubLaserCloudMatchedSurfs = nh.advertise<sensor_msgs::PointCloud2>("/cloud_matched_surfs", 100000);
     pubIkdtreeMap = nh.advertise<sensor_msgs::PointCloud2>("/ikdtree_map", 100000);
     pubOdomAftMapped = nh.advertise<nav_msgs::Odometry>("/lio_odometry", 100000);
